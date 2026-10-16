@@ -13,7 +13,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Respon
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from backend import database, security, steganography, text_files
+from backend import database, security, steganography, text_files, protected_images, migrate_encryption
 
 COOKIE = "stegchat_session"
 SESSION_SECONDS = 7 * 24 * 60 * 60
@@ -30,6 +30,7 @@ def now():
 @asynccontextmanager
 async def lifespan(app):
     database.initialize()
+    migrate_encryption.migrate()
     yield
 
 
@@ -132,11 +133,16 @@ def require_owner(db, chat_id, user_id):
 
 def message_row(db, message_id, user_id):
     # Não carrega imagens quando só precisamos de metadados.
-    row = db.execute("SELECT id, chat_id, sender_id, kind FROM messages WHERE id=?", (message_id,)).fetchone()
+    row = db.execute("SELECT id, chat_id, sender_id, kind, payload_id FROM messages WHERE id=?", (message_id,)).fetchone()
     if not row:
         raise HTTPException(404, "Mensagem não encontrada.")
     require_member(db, row["chat_id"], user_id)
     return row
+
+
+def require_payload(db, row, user_id):
+    if not protected_images.allowed(db, row["payload_id"], user_id):
+        raise HTTPException(403, "A sua conta não é destinatária desta mensagem protegida, ou a mensagem antiga precisa de ser reenviada.")
 
 
 @app.get("/api/health")
@@ -298,9 +304,10 @@ def messages(chat_id: int, user=Depends(current_user)):
     with database.connect() as db:
         require_member(db, chat_id, user["id"])
         rows = db.execute("""SELECT m.id, m.chat_id, m.sender_id, m.kind, m.body, m.created_at, m.edited_at,
+            EXISTS(SELECT 1 FROM payload_recipients r WHERE r.payload_id=m.payload_id AND r.user_id=?) AS can_reveal,
             u.username, u.display_name FROM messages m JOIN users u ON u.id=m.sender_id
-            WHERE m.chat_id=? ORDER BY m.id""", (chat_id,)).fetchall()
-    return [dict(row) for row in rows]
+            WHERE m.chat_id=? ORDER BY m.id""", (user["id"], chat_id)).fetchall()
+    return [{**dict(row), "can_reveal": bool(row["can_reveal"])} for row in rows]
 
 
 @app.post("/api/chats/{chat_id}/read")
@@ -327,18 +334,23 @@ def send_message(chat_id: int, body: str = Form("", max_length=10000), kind: str
             raise HTTPException(422, str(error))
     if not body.strip():
         raise HTTPException(422, "Escreva uma mensagem ou associe um ficheiro TXT.")
-    encoded = None
+    source = None
     if kind == "hidden":
         if image is None:
             raise HTTPException(422, "Escolha uma imagem para esconder a mensagem.")
-        try:
-            encoded = steganography.hide(image.file.read(steganography.MAX_UPLOAD + 1), body)
-        except ValueError as error:
-            raise HTTPException(422, str(error))
+        source = image.file.read(steganography.MAX_UPLOAD + 1)
     with database.connect() as db:
+        db.execute("BEGIN IMMEDIATE")
         require_member(db, chat_id, user["id"])
-        cursor = db.execute("INSERT INTO messages (chat_id, sender_id, kind, body, image, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                            (chat_id, user["id"], kind, body if kind == "text" else None, encoded, now()))
+        encoded = payload_id = None
+        if kind == "hidden":
+            ids = [row[0] for row in db.execute("SELECT user_id FROM members WHERE chat_id=?", (chat_id,))]
+            try:
+                encoded, payload_id = protected_images.seal(db, source, body, ids)
+            except ValueError as error:
+                raise HTTPException(422, str(error))
+        cursor = db.execute("INSERT INTO messages (chat_id, sender_id, kind, body, image, created_at, payload_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            (chat_id, user["id"], kind, body if kind == "text" else None, encoded, now(), payload_id))
         return {"id": cursor.lastrowid}
 
 
@@ -347,16 +359,18 @@ def edit_message(message_id: int, data: MessageEdit, user=Depends(current_user))
     if not data.body.strip():
         raise HTTPException(422, "A mensagem não pode estar vazia.")
     with database.connect() as db:
+        db.execute("BEGIN IMMEDIATE")
         row = message_row(db, message_id, user["id"])
         if row["sender_id"] != user["id"]:
             raise HTTPException(403, "Só pode editar as suas mensagens.")
         if row["kind"] == "hidden":
+            require_payload(db, row, user["id"])
             source = db.execute("SELECT image FROM messages WHERE id=?", (message_id,)).fetchone()[0]
             try:
-                encoded = steganography.hide(source, data.body, stored_image=True)
+                encoded, pid = protected_images.seal(db, source, data.body, protected_images.recipients(db, row["payload_id"]), stored_image=True)
             except ValueError as error:
                 raise HTTPException(422, str(error))
-            db.execute("UPDATE messages SET image=?, edited_at=? WHERE id=?", (encoded, now(), message_id))
+            db.execute("UPDATE messages SET image=?, payload_id=?, edited_at=? WHERE id=?", (encoded, pid, now(), message_id))
         else:
             db.execute("UPDATE messages SET body=?, edited_at=? WHERE id=?", (data.body, now(), message_id))
     return {"ok": True}
@@ -378,6 +392,7 @@ def message_image(message_id: int, user=Depends(current_user)):
         row = message_row(db, message_id, user["id"])
         if row["kind"] != "hidden":
             raise HTTPException(404, "Esta mensagem não contém uma imagem.")
+        require_payload(db, row, user["id"])
         data = db.execute("SELECT image FROM messages WHERE id=?", (message_id,)).fetchone()[0]
     return Response(data, media_type="image/png", headers={"Content-Disposition": f'inline; filename="mensagem-{message_id}.png"'})
 
@@ -388,16 +403,22 @@ def reveal_message(message_id: int, user=Depends(current_user)):
         row = message_row(db, message_id, user["id"])
         if row["kind"] != "hidden":
             raise HTTPException(422, "Esta mensagem já está em texto simples.")
+        require_payload(db, row, user["id"])
         data = db.execute("SELECT image FROM messages WHERE id=?", (message_id,)).fetchone()[0]
-    try:
-        return {"body": steganography.reveal(data)}
-    except ValueError as error:
-        raise HTTPException(422, str(error))
+        try:
+            return {"body": protected_images.reveal(db, data, user["id"], expected_id=row["payload_id"])}
+        except protected_images.AccessDenied as error:
+            raise HTTPException(403, str(error))
+        except ValueError as error:
+            raise HTTPException(422, str(error))
 
 
 @app.post("/api/steganography/reveal")
 def reveal_upload(image: UploadFile = File(...), user=Depends(current_user)):
     try:
-        return {"body": steganography.reveal(image.file.read(24 * 1024 * 1024 + 1))}
+        with database.connect() as db:
+            return {"body": protected_images.reveal(db, image.file.read(24 * 1024 * 1024 + 1), user["id"])}
+    except protected_images.AccessDenied as error:
+        raise HTTPException(403, str(error))
     except ValueError as error:
         raise HTTPException(422, str(error))

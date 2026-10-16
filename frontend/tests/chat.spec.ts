@@ -84,7 +84,31 @@ test("duas contas: conversar, ocultar, revelar, editar, eliminar e gerir grupo",
     await recipient.screenshot({ path: test.info().outputPath("chat-desktop.png"), fullPage: true });
     const download = recipient.waitForEvent("download");
     await recipient.getByRole("link", { name: "Guardar imagem PNG" }).click();
-    expect((await download).suggestedFilename()).toMatch(/mensagem-\d+\.png/);
+    const downloaded = await download;
+    expect(downloaded.suggestedFilename()).toMatch(/mensagem-\d+\.png/);
+    const downloadedPath = (await downloaded.path())!;
+    await recipient.getByRole("button", { name: "Revelar uma imagem" }).click();
+    await recipient.getByLabel("Imagem PNG", { exact: true }).setInputFiles(downloadedPath);
+    await recipient.getByRole("dialog").getByRole("button", { name: "Revelar mensagem", exact: true }).click();
+    await expect(recipient.locator(".decoded-result p")).toHaveText("Segredo editado 🌍");
+    await recipient.getByRole("button", { name: "Fechar janela" }).click();
+
+    const outsiderContext = await browser.newContext({ baseURL: "http://127.0.0.1:3011" });
+    try {
+      const outsider = await outsiderContext.newPage();
+      await outsider.goto("/");
+      await outsider.getByRole("button", { name: "Criar conta", exact: true }).click();
+      await outsider.getByLabel("Nome de apresentação").fill("Terceira pessoa");
+      await outsider.getByLabel("Username", { exact: true }).fill(`eve_${suffix}`);
+      await outsider.getByLabel("Palavra-passe").fill("UmaSenha12345");
+      await outsider.getByRole("button", { name: "Criar conta e começar" }).click();
+      await outsider.getByRole("button", { name: "Revelar uma imagem" }).click();
+      await outsider.getByLabel("Imagem PNG", { exact: true }).setInputFiles(downloadedPath);
+      await outsider.getByRole("dialog").getByRole("button", { name: "Revelar mensagem", exact: true }).click();
+      await expect(outsider.getByRole("dialog").getByRole("alert")).toContainText("não é um dos destinatários autorizados");
+      await expect(outsider.locator(".decoded-result")).toHaveCount(0);
+      await expect(outsider.locator("body")).not.toContainText("Segredo editado 🌍");
+    } finally { await outsiderContext.close(); }
 
     page.once("dialog", dialog => dialog.accept());
     await page.getByRole("button", { name: "Eliminar mensagem", exact: true }).first().click();

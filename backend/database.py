@@ -65,5 +65,17 @@ def initialize():
             CREATE INDEX IF NOT EXISTS messages_chat ON messages(chat_id, id);
             CREATE INDEX IF NOT EXISTS members_user ON members(user_id);
             CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
-            PRAGMA user_version = 1;
+            CREATE TABLE IF NOT EXISTS protected_payloads (
+                id TEXT PRIMARY KEY,
+                encryption_key BLOB NOT NULL CHECK(length(encryption_key)=32)
+            );
+            CREATE TABLE IF NOT EXISTS payload_recipients (
+                payload_id TEXT NOT NULL REFERENCES protected_payloads(id),
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                PRIMARY KEY(payload_id, user_id)
+            );
         """)
+        columns = {row[1] for row in db.execute("PRAGMA table_info(messages)")}
+        if "payload_id" not in columns:
+            db.execute("ALTER TABLE messages ADD COLUMN payload_id TEXT REFERENCES protected_payloads(id)")
+        db.execute("PRAGMA user_version = 2")

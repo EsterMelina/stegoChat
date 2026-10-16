@@ -28,6 +28,11 @@ def open_image(data: bytes, max_bytes: int = MAX_UPLOAD) -> Image.Image:
 
 def hide(data: bytes, message: str, *, stored_image: bool = False) -> bytes:
     envelope = PREFIX + base64.b64encode(message.encode("utf-8")).decode("ascii")
+    return hide_payload(data, envelope, stored_image=stored_image)
+
+
+def hide_payload(data: bytes, envelope: str, *, stored_image: bool = False) -> bytes:
+    """Incorpora um envelope ASCII; a API usa aqui apenas conteúdo cifrado."""
     with open_image(data, 24 * 1024 * 1024 if stored_image else MAX_UPLOAD) as image:
         required = (len(str(len(envelope))) + 1 + len(envelope)) * 8
         if required > image.width * image.height * 3:

@@ -37,7 +37,7 @@ export default function Auth({ onLogin }: { onLogin: (user: User) => void }) {
         {error && <p className="error" role="alert">{error}</p>}
         <button className="primary full" disabled={busy}>{busy ? "Aguarde…" : register ? "Criar conta e começar" : "Entrar na conversa"}<Icon name="send" size={18}/></button>
       </form>
-      <p className="auth-footnote"><Icon name="lock" size={16}/> A esteganografia esconde o texto na imagem.<br/>Não substitui a encriptação.</p>
+      <p className="auth-footnote"><Icon name="lock" size={16}/> Mensagens ocultas com conteúdo cifrado.<br/>Apenas as contas destinatárias podem revelar.</p>
     </div></section>
   </main>;
 }

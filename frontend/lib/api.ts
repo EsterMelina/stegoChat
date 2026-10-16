@@ -1,6 +1,6 @@
 export type User = { id: number; username: string; display_name: string };
 export type Chat = { id: number; kind: "direct" | "group"; name: string | null; owner_id: number | null; members: User[]; unread: number; last_message: { kind: string; body: string | null; created_at: string } | null };
-export type Message = { id: number; chat_id: number; sender_id: number; kind: "text" | "hidden"; body: string | null; created_at: string; edited_at: string | null; username: string; display_name: string };
+export type Message = { id: number; chat_id: number; sender_id: number; kind: "text" | "hidden"; body: string | null; created_at: string; edited_at: string | null; username: string; display_name: string; can_reveal: boolean };
 
 export class ApiError extends Error {
   constructor(message: string, public status: number) { super(message); }

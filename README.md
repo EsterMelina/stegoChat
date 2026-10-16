@@ -4,6 +4,8 @@ Aplicação web com **frontend Next.js**, **backend Python/FastAPI** e **base de
 
 ## Funcionalidades
 
+Consulte o [relatório completo do projeto](docs/RELATORIO_PROJETO.md): funcionamento da esteganografia, encriptação, ferramentas, código, base de dados e comandos.
+
 - Criar conta, entrar, manter a sessão ao recarregar e sair.
 - Procurar utilizadores por username ou nome de apresentação.
 - Conversas privadas entre duas contas, sem duplicar a mesma conversa.
@@ -12,7 +14,8 @@ Aplicação web com **frontend Next.js**, **backend Python/FastAPI** e **base de
 - Associar um ficheiro `.txt` do computador e ocultá-lo diretamente na imagem, sem mostrar o conteúdo no editor.
 - Editar também o texto de mensagens ocultas, voltando a codificar a imagem.
 - Suportar acentos, emojis e outros caracteres Unicode nas novas mensagens ocultas.
-- Revelar um PNG externo, incluindo imagens compatíveis criadas pelo programa Tkinter original.
+- Revelar um PNG protegido descarregado deste servidor, apenas com uma conta destinatária autorizada.
+- Encriptar o conteúdo com AES-256-GCM antes de o esconder; usernames públicos não são chaves secretas.
 - Criar grupos, alterar o nome, adicionar/remover participantes e sair.
 - Transferir automaticamente a administração quando o administrador sai; eliminar o grupo quando sai o último participante.
 - Mostrar mensagens não lidas e atualizar as conversas automaticamente a cada 3 segundos.
@@ -43,7 +46,7 @@ Abra a pasta do projeto no VS Code e o menu **Terminal → Novo Terminal**.
 ### Entrar na pasta do projeto
 
 ```powershell
-cd "E:\Important Issues\Academic\quarto AnoSegundoSemestre\SI\esteganografiaTrabalho"
+cd "E:\Important Issues\Academic\quarto AnoSegundoSemestre\SI\stegoChat"
 ```
 
 Adapte o caminho se mover o projeto. As aspas são necessárias devido aos espaços.
@@ -128,9 +131,9 @@ O frontend encaminha os pedidos `/api/...` para o backend na porta 8001. Não pr
 7. Os botões de lápis e caixote do lixo junto às suas mensagens permitem editar ou eliminar. Uma mensagem eliminada desaparece para todos; uma edição aparece identificada como «editada».
 8. Use **Criar grupo**, dê um nome e escolha os participantes. No cabeçalho da conversa, **Grupo** permite gerir participantes e sair.
 
-O criador é o administrador. Apenas ele pode alterar o nome e adicionar/remover pessoas. Qualquer participante pode sair. Novos participantes têm acesso a todo o histórico do grupo; após sair ou ser removido, o acesso pela API é revogado. Ficheiros que alguém já descarregou continuam na posse dessa pessoa.
+O criador é o administrador. Apenas ele pode alterar o nome e adicionar/remover pessoas. Qualquer participante pode sair. Novos participantes veem o histórico normal, mas só o remetente e os participantes presentes no envio podem revelar uma mensagem oculta. Sair revoga o acesso à conversa; a conta continua autorizada a revelar cópias das imagens que lhe foram destinadas, através do upload.
 
-O botão **Revelar uma imagem**, no fundo da barra lateral, lê um PNG externo sem precisar de o enviar para uma conversa.
+O botão **Revelar uma imagem**, no fundo da barra lateral, lê um PNG protegido sem o enviar para uma conversa. Exige sessão e autorização registada neste servidor; ter a fotografia ou saber o username não basta. PNG antigos sem encriptação são recusados neste fluxo.
 
 Os ficheiros `.txt` devem estar em **UTF-8**, ter até **64 KB** e conter no máximo **10 000 caracteres**. O navegador envia o ficheiro original e a imagem ao backend, sem ler o TXT nem preencher a caixa de escrita. O backend valida o conteúdo e incorpora-o na imagem; o texto só é devolvido quando um participante pede para revelar (ou editar) a mensagem oculta. Se já existir um rascunho escrito, é pedida confirmação antes de o descartar para associar o TXT. Pode remover o ficheiro para voltar à escrita manual. Acentos, emojis e quebras de linha são preservados. O que fica oculto na imagem é o conteúdo do TXT, não o seu nome ou um anexo separado. A mensagem continua sujeita à capacidade da imagem escolhida.
 
@@ -151,8 +154,12 @@ backend/data/chat.db
 | `chats` | Conversas privadas e grupos, nome e administrador. |
 | `members` | Participantes de cada conversa e última mensagem marcada como lida. |
 | `messages` | Autor, conversa, tipo, texto ou imagem PNG, datas de envio e edição. |
+| `protected_payloads` | Identificador e chave AES secreta de cada versão de conteúdo oculto. |
+| `payload_recipients` | Contas autorizadas no momento do envio, incluindo o remetente. |
 
-As imagens são guardadas como **BLOB** na própria base de dados. Nas mensagens ocultas, o campo `body` é `NULL`: o texto está incorporado na imagem, não numa segunda coluna de texto. O servidor extrai-o quando um participante pede para revelar.
+As imagens são guardadas como **BLOB** na própria base de dados. Nas mensagens ocultas, `body` é `NULL` e `payload_id` referencia a proteção: o conteúdo incorporado no PNG está cifrado. O servidor verifica a conta e decifra apenas para destinatários autorizados. As chaves ficam na base de dados, nunca no PNG.
+
+Ao arrancar, o servidor atualiza o schema para a versão 2 e migra imagens antigas, com backup prévio em `backend/data/*.before-encryption-*.db`. Em grupos antigos, como não existia histórico de participantes por envio, só o autor recebe acesso; pode reenviar para os destinatários pretendidos. Imagens que não puderem ser migradas ficam bloqueadas. Cópias antigas já descarregadas não podem ser protegidas retroativamente.
 
 As palavras-passe usam `scrypt` com sal aleatório. A sessão dura sete dias e usa um cookie `HttpOnly`; apenas o hash do token é guardado na base de dados. Não há configuração de credenciais de administrador inicial: cada pessoa cria a sua conta.
 
@@ -172,7 +179,7 @@ Cria um ficheiro com data e hora em `backups/`, usando a API de backup do SQLite
 .\venv\Scripts\python.exe -m backend.backup backups\minha-copia.db
 ```
 
-O backup inclui contas, sessões, conversas, mensagens e imagens. As pastas de dados e backups estão no `.gitignore`.
+O backup inclui contas, sessões, conversas, mensagens, imagens, chaves secretas e permissões. Proteja o acesso a estes ficheiros: quem possui a base completa pode decifrar os conteúdos. As pastas de dados e backups estão no `.gitignore`.
 
 ### Restaurar uma cópia sem substituir a base atual
 
@@ -209,13 +216,17 @@ backend/
   database.py               Schema SQLite e transações
   security.py               Hashes de palavras-passe e sessões
   steganography.py          Ocultação e revelação LSB com Unicode
+  protected_images.py       AES-256-GCM e autorização por destinatário
+  migrate_encryption.py     Migração de imagens antigas com backup
   text_files.py             Leitura e validação do TXT apenas no backend
   backup.py                 Backup consistente do SQLite
   requirements.txt          Dependências diretas
   requirements-lock.txt     Versões instaladas na validação
   tests/test_api.py         Testes da API e das permissões
+  tests/test_protected_images.py  Cópias, grupos, adulteração e migração
   data/chat.db              Dados da aplicação (criado ao iniciar)
 docs/
+  RELATORIO_PROJETO.md      Relatório completo e ferramentas utilizadas
   ARQUITETURA.md            Explicação dos fluxos, funções e endpoints
   DESKTOP.md                Documentação anterior da versão Tkinter
 main.py                     Programa desktop original, preservado
@@ -232,7 +243,7 @@ A explicação das duas camadas, das funções e dos endpoints está em [docs/AR
 .\venv\Scripts\python.exe -m unittest discover -s backend\tests -v
 ```
 
-Cria bases de dados temporárias. Verifica autenticação, acesso às conversas e imagens, autoria das edições/eliminação, grupos, mensagens Unicode, imagens inválidas, capacidade e compatibilidade com PNG antigos.
+Cria bases de dados temporárias. Verifica autenticação, acesso às conversas e imagens, autoria, grupos, Unicode, capacidade, bloqueio de terceiros com cópias do PNG, adulteração, backup e migração de imagens antigas.
 
 ### Frontend — dentro de `frontend`
 
@@ -288,7 +299,7 @@ Se a porta 3000 estiver ocupada e usar outra, ajuste `CHAT_ORIGINS` e reinicie o
 
 ## 9. Limites desta versão
 
-- **Esteganografia não é encriptação.** O servidor e os participantes autorizados podem revelar a mensagem. Não existe encriptação ponta a ponta ou palavra-passe adicional por imagem.
+- **LSB esconde e AES-256-GCM cifra.** Só as contas destinatárias podem revelar pela aplicação, mas o servidor guarda as chaves: não existe encriptação ponta a ponta. Eliminar/editar uma mensagem não revoga cópias já entregues aos destinatários originais.
 - Imagens de entrada: até **8 MB** e **4 milhões de píxeis**. A mensagem deve caber na imagem. Texto: até **10 000 caracteres**. Grupos: até **50 participantes**.
 - O PNG gerado preserva os píxeis. Redimensionar, recomprimir ou converter para JPEG pode destruir a mensagem. A versão desktop antiga não interpreta o envelope Unicode novo; use o chat para revelar imagens produzidas pelo chat.
 - Atualização automática por **polling de 3 segundos**, com o histórico completo da conversa aberta. Não há WebSockets, paginação, chamadas de voz/vídeo ou indicador «a escrever».

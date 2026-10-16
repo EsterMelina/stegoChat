@@ -111,7 +111,8 @@ class ChatTests(unittest.TestCase):
             self.assertEqual(self.bob.post(f"/api/messages/{mid}/reveal").json()["body"], text)
         png = self.bob.get(f"/api/messages/{mid}/image")
         self.assertEqual(png.headers["content-type"], "image/png")
-        self.assertEqual(steganography.reveal(png.content), text)
+        self.assertTrue(steganography.reveal(png.content).startswith("STEGCHAT2:"))
+        self.assertNotIn(text, steganography.reveal(png.content))
         with Image.open(io.BytesIO(png.content)) as image:
             self.assertEqual(image.getpixel((0, 0))[3], 90)
         changed = "Nova mensagem 🙂"
@@ -163,7 +164,7 @@ class ChatTests(unittest.TestCase):
     def test_reveal_external_and_legacy(self):
         data = steganography.hide(picture(), "Uma mensagem 🖼️")
         result = self.bob.post("/api/steganography/reveal", files={"image": ("secret.png", data, "image/png")})
-        self.assertEqual(result.json()["body"], "Uma mensagem 🖼️")
+        self.assertEqual(result.status_code, 403)
         with Image.new("RGB", (100, 100), "red") as source:
             legacy = lsb.hide(source, "Mensagem antiga com ação")
             output = io.BytesIO()

@@ -1,5 +1,7 @@
 # Arquitetura e explicação do StegChat
 
+Para a explicação completa de LSB, AES-256-GCM, ferramentas e comandos, consulte o [relatório do projeto](RELATORIO_PROJETO.md).
+
 ## Duas camadas
 
 ```mermaid
@@ -91,7 +93,7 @@ A rolagem acompanha mensagens novas quando o utilizador já está perto do fim; 
 
 ### `database.py`
 
-`DB_PATH` usa `CHAT_DB_PATH` ou um caminho padrão junto ao módulo. `initialize()` cria a pasta, ativa WAL e cria o schema se ainda não existir. `PRAGMA user_version = 1` identifica a primeira versão do schema; alterações futuras ao schema exigirão migrações próprias.
+`DB_PATH` usa `CHAT_DB_PATH` ou um caminho padrão junto ao módulo. `initialize()` cria a pasta, ativa WAL e cria o schema se ainda não existir. A versão 2 acrescenta `protected_payloads`, `payload_recipients` e `messages.payload_id`, preservando os dados existentes.
 
 `connect()` é um context manager: abre uma ligação SQLite, ativa chaves estrangeiras e configura resultados por nome de coluna. Confirma a transação no sucesso, reverte em caso de exceção e fecha sempre a ligação. Os valores SQL usam parâmetros `?`, evitando concatenar entradas dos utilizadores nas consultas.
 
@@ -115,7 +117,7 @@ erDiagram
 
 ### `main.py`: arranque e segurança dos pedidos
 
-- `lifespan()` inicializa a base de dados ao arrancar.
+- `lifespan()` inicializa a base de dados e migra as imagens antigas ao arrancar, com backup prévio quando há imagens pendentes.
 - `protect_requests()` rejeita origens externas não autorizadas em pedidos que alteram estado, verifica o tamanho declarado do pedido e aplica `Cache-Control: no-store` e `X-Content-Type-Options: nosniff`.
 - `current_user()` consulta o cookie, calcula o hash e procura uma sessão que ainda não expirou. Caso contrário, responde `401`.
 - `throttle()` limita registos e tentativas de entrada a 30 por minuto e endereço visto pela API. O contador reside na memória do processo; atrás do proxy local, várias contas podem partilhar o mesmo limite.
@@ -129,7 +131,7 @@ erDiagram
 - `require_owner()` exige que a conta seja administradora do grupo.
 - `message_row()` localiza uma mensagem e verifica a participação antes de dar acesso aos seus metadados.
 - Editar e eliminar exige também `sender_id == user.id`. Ser administrador de grupo não permite editar mensagens dos outros.
-- A imagem nunca é servida por uma pasta pública: a rota verifica a sessão e a participação.
+- `require_payload()` exige autorização em `payload_recipients`, além da participação atual para rotas da conversa. A imagem nunca é servida por uma pasta pública. O histórico devolve `can_reveal` para apresentar um aviso aos novos membros sem acesso ao conteúdo antigo.
 
 ### Contas e conversas
 
@@ -143,21 +145,29 @@ Ao sair de um grupo, a associação em `members` é eliminada. Se o administrado
 
 ### Mensagens
 
-`send_message()` recebe o tipo e texto manual (`body`) ou um upload TXT (`text_file`), além da imagem para mensagens ocultas. Rejeita TXT no modo normal ou TXT e texto manual em simultâneo. Verifica participação e validade. Para mensagens ocultas, processa a imagem antes de a inserir e volta a verificar a participação antes de gravar.
+`send_message()` recebe o tipo e texto manual (`body`) ou um upload TXT (`text_file`), além da imagem para mensagens ocultas. Rejeita TXT no modo normal ou TXT e texto manual em simultâneo. Numa transação `BEGIN IMMEDIATE`, verifica a participação, fixa os destinatários presentes e cifra/incorpora o conteúdo antes de gravar mensagem, chave e permissões em conjunto.
 
-`edit_message()` permite alterar texto normal ou voltar a incorporar o texto numa imagem existente. Atualiza `edited_at`. `delete_message()` remove a linha, incluindo a imagem. `mark_read()` grava o maior ID apresentado, limitado ao último ID efetivamente existente na conversa.
+`edit_message()` permite alterar texto normal ou cifrar novamente numa imagem existente, com nova chave e os destinatários originais. Atualiza `edited_at`. `delete_message()` remove a mensagem e a imagem da conversa; preserva chaves e autorizações das cópias já entregues. `mark_read()` grava o maior ID apresentado, limitado ao último ID efetivamente existente na conversa.
 
-`message_image()` devolve os bytes PNG com um nome de ficheiro. `reveal_message()` extrai o texto apenas depois de verificar autorização. `reveal_upload()` permite a uma conta autenticada ler um PNG externo sem o guardar numa conversa.
+`message_image()` devolve os bytes PNG apenas a participantes autorizados. `reveal_message()` extrai e decifra após verificar autorização. `reveal_upload()` identifica o conteúdo no PNG e exige que a conta autenticada esteja nos destinatários registados, mesmo quando já saiu do grupo. Imagens sem proteção ou de outro servidor são recusadas.
+
+### `protected_images.py` e `migrate_encryption.py`
+
+`seal()` gera uma chave AES de 256 bits, um identificador aleatório de 16 bytes e um nonce de 12 bytes. Cifra UTF-8 com AES-GCM, autenticando também o identificador, e incorpora `STEGCHAT2:` seguido de Base64 do identificador, nonce e conteúdo cifrado com etiqueta de autenticação. A chave permanece em `protected_payloads`; as contas autorizadas ficam em `payload_recipients`. Os usernames não são usados como segredos.
+
+`reveal()` extrai o envelope, verifica a conta da sessão e autentica/decifra o conteúdo. Alterações ao conteúdo cifrado são rejeitadas. A autorização é fixada no envio; adicionar membros não concede acesso a mensagens ocultas anteriores. O servidor possui as chaves, pelo que esta proteção não é ponta a ponta.
+
+`migrate()` cria um backup SQLite consistente e converte os PNG antigos. Conversas privadas conservam os dois destinatários; em grupos antigos autoriza apenas o autor, pois não há registo histórico dos membros. Falhas de leitura/capacidade deixam a imagem bloqueada. Cópias antigas fora do servidor permanecem sem proteção.
 
 ### `steganography.py`
 
 `open_image()` verifica o tamanho em bytes, abre com Pillow, limita a resolução e converte para RGB/RGBA. Preserva o canal alfa quando existe; a biblioteca LSB usa apenas os três canais de cor.
 
-`hide()` transforma o texto em bytes UTF-8 e depois em Base64 ASCII, acrescentando o marcador `STEGCHAT1:`. Este envelope contorna a limitação da codificação padrão da biblioteca Stegano para certos caracteres Unicode. Base64 é apenas uma representação do texto, não encriptação.
+`hide_payload()` incorpora o envelope já cifrado da camada de proteção. `hide()` conserva o formato antigo `STEGCHAT1:` (UTF-8 em Base64) para compatibilidade interna e testes de migração; não é usado no envio atual do chat. Base64 é representação, não encriptação.
 
 Antes de ocultar, calcula o número de bits necessários, incluindo o prefixo de comprimento utilizado pela biblioteca. Cada píxel oferece três bits. Se não couber, devolve uma explicação em vez de guardar uma imagem incompleta. `lsb.hide()` altera os bits menos significativos e o resultado é guardado como PNG.
 
-`reveal()` extrai o conteúdo LSB. Se encontrar o marcador novo, descodifica Base64 e UTF-8. Caso contrário, devolve o texto antigo para compatibilidade. Utiliza `close_file=False` e blocos `with` para controlar corretamente o tempo de vida das imagens.
+`reveal()` extrai o conteúdo LSB. Descodifica o envelope legado `STEGCHAT1:` quando existe; devolve o envelope `STEGCHAT2:` ainda cifrado à camada de proteção. A API não devolve esta extração diretamente ao utilizador. Utiliza `close_file=False` e blocos `with` para controlar o tempo de vida das imagens.
 
 O frontend envia texto e imagem ao servidor durante a criação; não há encriptação de ponta a ponta. O PNG guardado é o portador da mensagem. A ligação deve usar HTTPS quando a aplicação estiver fora do ambiente local.
 
@@ -201,7 +211,7 @@ Todas as rotas abaixo têm prefixo `/api`. Exceto saúde, registo e entrada, os 
 
 `frontend/tests/chat.spec.ts` usa Playwright com duas sessões de navegador independentes. Testa registo, conversas, envio normal e oculto, revelação repetida, edição, eliminação, descarga, grupos, saída, persistência de sessão e apresentação móvel. Os servidores de teste usam portas e uma base de dados próprias.
 
-Esta primeira versão usa polling e histórico completo, apropriados a uma demonstração pequena. O schema tem versão inicial, mas não existe um sistema automático de migrações. Para evoluir o projeto com dados existentes, crie migrações antes de alterar as tabelas.
+Esta versão usa polling e histórico completo, apropriados a uma demonstração pequena. Inclui migração automática para o schema 2 e proteção das imagens antigas. Alterações futuras exigem migrações próprias. `test_protected_images.py` verifica cópias de PNG, destinatários de grupos, adulteração, persistência das chaves e migração. O teste no navegador inclui uma terceira conta sem autorização.
 
 ## Referências oficiais
 
