@@ -34,3 +34,7 @@ export function title(chat: Chat, me: number) {
 export function initials(name: string) {
   return name.trim().split(/\s+/).slice(0, 2).map(part => part[0]).join("").toUpperCase();
 }
+
+export type RegisterResponse = { message: string; debug_code?: string };
+export type MessageResponse  = { message: string };
+export type ForgotResponse   = { message: string; debug_token?: string; debug_email?: string };

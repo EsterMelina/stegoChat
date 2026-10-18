@@ -1,4 +1,12 @@
 """API do chat. Execute da raiz: python -m uvicorn backend.main:app --reload --port 8001."""
+
+from pathlib import Path
+from dotenv import load_dotenv
+
+# O .env está em backend/.env; carregamo-lo por caminho absoluto
+# para não depender do directório de onde o uvicorn é arrancado.
+load_dotenv(Path(__file__).resolve().parent / ".env")
+
 import os
 import re
 import secrets
@@ -13,7 +21,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Respon
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from backend import database, security, steganography, text_files, protected_images, migrate_encryption
+from backend import auth_email, database, security, steganography, text_files, protected_images, migrate_encryption
 
 COOKIE = "stegchat_session"
 SESSION_SECONDS = 7 * 24 * 60 * 60
@@ -31,10 +39,14 @@ def now():
 async def lifespan(app):
     database.initialize()
     migrate_encryption.migrate()
+    auth_email.ensure_schema()
     yield
 
 
 app = FastAPI(title="StegChat API", version="1.0.0", lifespan=lifespan)
+# O router de autenticação por email já está no módulo backend.auth_email.
+# Inclui-se UMA única vez, sem imports duplicados.
+app.include_router(auth_email.router)
 
 
 @app.middleware("http")
@@ -96,10 +108,6 @@ class Credentials(BaseModel):
     password: str = Field(min_length=8, max_length=128)
 
 
-class Registration(Credentials):
-    display_name: str = Field(min_length=1, max_length=60)
-
-
 class DirectChat(BaseModel):
     user_id: int
 
@@ -150,31 +158,17 @@ def health():
     return {"status": "ok", "service": "stegchat"}
 
 
-@app.post("/api/auth/register", status_code=201)
-def register(data: Registration, request: Request, response: Response):
-    throttle(request)
-    username = data.username.strip().lower()
-    if not re.fullmatch(r"[a-z0-9_]{3,30}", username) or not data.display_name.strip():
-        raise HTTPException(422, "Use um nome e um username com 3–30 letras, números ou underscore.")
-    password_hash = security.hash_password(data.password)
-    try:
-        with database.connect() as db:
-            cursor = db.execute("INSERT INTO users (username, display_name, password_hash, created_at) VALUES (?, ?, ?, ?)",
-                                (username, data.display_name.strip(), password_hash, now()))
-            session(db, cursor.lastrowid, response, request.cookies.get(COOKIE, ""))
-            return public_user(db.execute("SELECT * FROM users WHERE id=?", (cursor.lastrowid,)).fetchone())
-    except sqlite3.IntegrityError:
-        raise HTTPException(409, "Este username já está em uso.")
-
-
 @app.post("/api/auth/login")
 def login(data: Credentials, request: Request, response: Response):
     throttle(request)
     with database.connect() as db:
-        user = db.execute("SELECT * FROM users WHERE username=?", (data.username.strip().lower(),)).fetchone()
+        identifier = data.username.strip().lower()
+        user = db.execute("SELECT * FROM users WHERE username=? COLLATE NOCASE OR email=? COLLATE NOCASE", (identifier, identifier)).fetchone()
         if not user:
             security.hash_password(data.password)  # Trabalho equivalente ao de uma conta existente.
             raise HTTPException(401, "Username ou palavra-passe incorretos.")
+        if user["status"] != "active":
+            raise HTTPException(403, "Verifique o seu email antes de iniciar sessão.")
         if not security.verify_password(data.password, user["password_hash"]):
             raise HTTPException(401, "Username ou palavra-passe incorretos.")
         session(db, user["id"], response, request.cookies.get(COOKIE, ""))
