@@ -322,3 +322,47 @@ Se a porta 3000 estiver ocupada e usar outra, ajuste `CHAT_ORIGINS` e reinicie o
 | Backend não arranca depois de mover o projeto | Crie novamente o ambiente virtual na nova localização e reinstale as dependências. |
 
 A documentação interativa da API está em **http://127.0.0.1:8001/docs**. O esquema das tabelas e a lista de rotas encontram-se em [docs/ARQUITETURA.md](docs/ARQUITETURA.md).
+
+
+## 10. Estado da implementação — CONCLUÍDO
+
+A autenticação por email e a recuperação de palavra-passe estão **implementadas e integradas** com o backend FastAPI/SQLite e com o frontend Next.js.
+
+### 10.1 Resumo do que está pronto
+
+**Backend**
+
+| Endpoint | Método | Estado | Descrição |
+|----------|--------|--------|-----------|
+| `/api/auth/register` | POST | ✅ | Cria conta `pending` e envia OTP de 6 dígitos via Brevo. Devolve **202** com `{message}`. |
+| `/api/auth/verify-email` | POST | ✅ | Valida o OTP (máx. 5 tentativas, expira em 10 min) e passa a conta a `active`. |
+| `/api/auth/resend-verification` | POST | ✅ | Reenvia o OTP com cooldown de 60 s. |
+| `/api/auth/forgot-password` | POST | ✅ | Resposta genérica; envia link com token único se a conta for elegível. |
+| `/api/auth/reset-password` | POST | ✅ | Valida o token (SHA-256, 15 min, uso único), altera a palavra-passe e **apaga todas as sessões** do utilizador. |
+| `/api/auth/login` | POST | ✅ | Aceita username **ou** email; recusa contas `pending`; usa o mesmo hash do registo. |
+
+**Frontend**
+
+- `components/Auth.tsx` — registo com `email`, ecrã de verificação do OTP com contagem decrescente no reenvio, link “Esqueci-me da palavra-passe”.
+- `app/reset-password/page.tsx` — lê `email` e `token` do URL e permite definir a nova palavra-passe.
+- `lib/api.ts` — tipos `RegisterResponse`, `MessageResponse`, `ForgotResponse`.
+- Testes Playwright reescritos com o helper `registerAndVerify` (usa `AUTH_TEST_MODE=1` para obter o OTP) e teste dedicado de reset que confirma a invalidação das sessões antigas.
+
+### 10.2 Correções aplicadas durante a integração
+
+1. **Hash de palavra-passe unificado.** O `auth_email.py` deixou de usar o formato `scrypt$salt$digest` e passou a importar `hash_password`/`verify_password` de `backend.security`, que usa o formato `salt:digest`. Sem esta correcção, o login devolvia **500** (`ValueError: not enough values to unpack (expected 2, got 1)`) para qualquer conta criada pelo registo.
+
+2. **`.env` carregado por caminho absoluto.** O `main.py` passou a usar `load_dotenv(Path(__file__).resolve().parent / ".env")`, para que o `.env` em `backend/.env` seja lido independentemente do directório de onde o `uvicorn` é arrancado. Sem isto, o registo devolvia **503** (“serviço de email não configurado”).
+
+3. **Router incluído uma única vez.** Removido o import duplicado `from auth_email import ...` que causava `ModuleNotFoundError`. O router é incluído apenas com `app.include_router(auth_email.router)`.
+
+4. **Contas antigas limpas.** As contas `pending` acumuladas durante o desenvolvimento e as contas com hash no formato antigo (`scrypt$...`) foram apagadas — não são compatíveis com o login actual.
+
+### 10.3 Configuração necessária
+
+- `.env` na **raiz do projecto** (nunca no frontend):
+  ```dotenv
+  BREVO_API_KEY=xkeysib-...
+  BREVO_SENDER_EMAIL=no-reply@teudominio.mz
+  BREVO_SENDER_NAME=StegoChat
+  FRONTEND_URL=http://127.0.0.1:3011
