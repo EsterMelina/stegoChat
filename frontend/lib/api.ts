@@ -55,12 +55,13 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
 
-  const url = `${API_BASE_URL}/api${normalizedPath}`;
+ // const url = `${API_BASE_URL}/api${normalizedPath}`;
+const url = `/api${normalizedPath}`;
 
   try {
     response = await fetch(url, {
       ...init,
-      credentials: "include",
+      credentials: "same-origin",
       cache: "no-store",
       headers: {
         ...(init.body && !(init.body instanceof FormData)
