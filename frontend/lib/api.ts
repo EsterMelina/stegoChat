@@ -47,7 +47,7 @@ export class ApiError extends Error {
  * Em desenvolvimento, usar o backend local na porta 8001.
  */
 const API_BASE_URL = (
-  import.meta.env.VITE_API_URL || "http://localhost:8001"
+  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001"
 ).replace(/\/+$/, "");
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
