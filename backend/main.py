@@ -26,7 +26,14 @@ from backend import auth_email, database, security, steganography, text_files, p
 COOKIE = "stegchat_session"
 SESSION_SECONDS = 7 * 24 * 60 * 60
 SECURE_COOKIES = os.getenv("CHAT_SECURE_COOKIES", "0") == "1"
-ALLOWED_ORIGINS = set(os.getenv("CHAT_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000,http://localhost:8001,http://127.0.0.1:8001").split(","))
+ALLOWED_ORIGINS = {
+    origin.strip()
+    for origin in os.getenv(
+        "CHAT_ORIGINS",
+        "http://localhost:3000,http://127.0.0.1:3000,http://localhost:8001,http://127.0.0.1:8001",
+    ).split(",")
+    if origin.strip()
+}
 attempts = defaultdict(deque)
 attempt_lock = threading.Lock()
 

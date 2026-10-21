@@ -41,22 +41,12 @@ export class ApiError extends Error {
   }
 }
 
-/**
- * URL base do backend.
- * Em produção, configurar VITE_API_URL no Vercel.
- * Em desenvolvimento, usar o backend local na porta 8001.
- */
-const API_BASE_URL = (
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001"
-).replace(/\/+$/, "");
-
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   let response: Response;
 
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-
- // const url = `${API_BASE_URL}/api${normalizedPath}`;
-const url = `/api${normalizedPath}`;
+  // Same-origin path; Next.js rewrites /api to the backend server-side.
+  const url = `/api${normalizedPath}`;
 
   try {
     response = await fetch(url, {
@@ -91,8 +81,9 @@ const url = `/api${normalizedPath}`;
     }
 
     if ([502, 503, 504].includes(response.status)) {
+      const detail = typeof data?.detail === "string" ? data.detail : null;
       throw new ApiError(
-        "Não foi possível contactar o backend do StegChat.",
+        detail || `Servi\u00e7o temporariamente indispon\u00edvel (HTTP ${response.status}).`,
         response.status,
       );
     }
