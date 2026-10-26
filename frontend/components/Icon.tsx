@@ -12,6 +12,7 @@ const paths: Record<string, React.ReactNode> = {
   edit: <><path d="m15 4 5 5M4 20l5-1L21 7a2 2 0 0 0-4-4L5 15l-1 5Z"/></>,
   trash: <><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/></>,
   eye: <><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></>,
+  "eye-off": <><path d="m3 3 18 18"/><path d="M10.6 5.2A10.7 10.7 0 0 1 12 5c6 0 10 7 10 7a18.8 18.8 0 0 1-3.1 4.1M6.2 6.2C3.6 8 2 12 2 12s4 7 10 7a9.8 9.8 0 0 0 3.8-.8"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></>,
   download: <><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/></>,
   back: <path d="m14 5-7 7 7 7"/>,
   check: <path d="m5 12 4 4L20 5"/>,

@@ -14,6 +14,7 @@ export default function Auth({ onLogin }: { onLogin: (user: User) => void }) {
   const [code, setCode] = useState("");
   const [resendCooldown, setResendCooldown] = useState(0);
   const [forgot, setForgot] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   function startCooldown(seconds = 60) {
     setResendCooldown(seconds);
@@ -110,7 +111,7 @@ export default function Auth({ onLogin }: { onLogin: (user: User) => void }) {
     finally { setBusy(false); }
   }
 
-  return <main className="auth-page">
+  return <main className={`auth-page${step === "verify" ? " otp-page" : ""}`}>
     <section className="auth-story">
       <div className="brand"><span className="brand-mark"><Icon name="chat" size={26}/></span>steg<span>chat</span></div>
       <div className="story-content"><span className="eyebrow">CADA CONVERSA TEM MAIS PARA CONTAR</span>
@@ -157,7 +158,14 @@ export default function Auth({ onLogin }: { onLogin: (user: User) => void }) {
           {step === "register" && <label>Nome de apresentação<input name="display_name" autoComplete="name" placeholder="Como quer ser chamado?" maxLength={60} required/></label>}
           <label>Username<input name="username" autoComplete="username" placeholder="o_seu_username" pattern="[a-zA-Z0-9_]{3,30}" minLength={3} maxLength={30} title="3 a 30 letras, números ou underscore" required/></label>
           {step === "register" && <label>Email<input name="email" type="email" autoComplete="email" placeholder="utilizador@example.com" required/></label>}
-          <label>Palavra-passe<input name="password" type="password" autoComplete={step === "register" ? "new-password" : "current-password"} placeholder="Pelo menos 8 caracteres" minLength={8} maxLength={128} required/></label>
+          <label>Palavra-passe
+            <span className="password-field">
+              <input name="password" type={showPassword ? "text" : "password"} autoComplete={step === "register" ? "new-password" : "current-password"} placeholder="Pelo menos 8 caracteres" minLength={8} maxLength={128} required/>
+              <button type="button" className="password-toggle" onClick={() => setShowPassword(visible => !visible)} aria-label={showPassword ? "Ocultar palavra-passe" : "Mostrar palavra-passe"} aria-pressed={showPassword}>
+                <Icon name={showPassword ? "eye-off" : "eye"} size={18}/>
+              </button>
+            </span>
+          </label>
           {error && <p className="error" role="alert">{error}</p>}
           {info && <p className="info" role="status">{info}</p>}
           <button className="primary full" disabled={busy}>{busy ? "Aguarde…" : step === "register" ? "Criar conta e verificar" : "Entrar na conversa"}<Icon name="send" size={18}/></button>
